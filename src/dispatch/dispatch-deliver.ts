@@ -7,6 +7,7 @@
  */
 import type { PluginLogger } from '../utils/plugin-logger.js';
 import { formatLogTextPreview } from '../utils/log-text-preview.js';
+import { normalizeBodyForDedupe } from '../outbound/streaming-controller.js';
 import type {
   DeliverContext,
   DeliverInfo,
@@ -17,6 +18,16 @@ export type StreamTextOwner = {
   hasStarted: boolean;
   shouldFallbackToStatic: boolean;
   isTerminal: boolean;
+  /** 气泡已「成功展示并收尾」的正文；未成功展示时为空串 */
+  displayedBodyText: string;
+  /** 已真正推送到 QQ 流的最后一段文本 */
+  lastStreamedText: string;
+  /** 正文是否已由兜底路径发出 */
+  bodyDelivered: boolean;
+  /** deliver 层在 finalize 前注入回合最终正文 */
+  setFinalText(text: string): void;
+  /** 正文兜底：流未真正展示完整正文时补发完整正文 */
+  sendFinalBodyIfNeeded(reason: string): Promise<void>;
   finalize(): Promise<void>;
 };
 
@@ -31,6 +42,8 @@ export type DispatchDeliverState = {
     info: DeliverInfo | undefined,
     ctx: DeliverContext,
   ) => Promise<void>;
+  /** 被流接管、尚未静态发送的中段文本（并入末条正文） */
+  pendingMidText: string;
 };
 
 export function streamOwnsText(controller: StreamTextOwner | null): boolean {
@@ -43,7 +56,7 @@ export async function deliverDispatchPayload(
   state: DispatchDeliverState,
 ): Promise<void> {
   const kind = info?.kind;
-  const text = payload.text?.trim() ?? '';
+  let text = payload.text?.trim() ?? '';
   const hasMedia = !!(payload.mediaUrl || payload.mediaUrls?.length);
   const sendReply = state.deliverReply;
   state.log?.debug(
@@ -55,6 +68,17 @@ export async function deliverDispatchPayload(
     return;
   }
 
+  // 2026-10-23 v4（漏点修复）：气泡已成功展示该文本且流已收尾 ⇒ 任何静态路径都不再重发。
+  // 推流失败 / 流未完成 ⇒ displayedBodyText 为空串 ⇒ 不命中，静态兜底照旧送达。
+  if (
+    text && !hasMedia && !payload.audioAsVoice && state.streamingController
+    && normalizeBodyForDedupe(text) === normalizeBodyForDedupe(state.streamingController.displayedBodyText)
+  ) {
+    state.deliveredTexts.add(text);
+    state.log?.info(`[qqbot][guard] text already shown in stream bubble - static re-send skipped (chars=${text.length} kind=${kind ?? 'none'})`);
+    return;
+  }
+
   if (kind === 'block') {
     if (payload.audioAsVoice) {
       await sendReply(payload, info, state.ctx);
@@ -62,7 +86,15 @@ export async function deliverDispatchPayload(
       return;
     }
     await forwardMediaUrls(payload, state);
-    if (streamOwnsText(state.streamingController) || !text || state.deliveredTexts.has(text)) {
+    if (!text || state.deliveredTexts.has(text)) {
+      return;
+    }
+    if (streamOwnsText(state.streamingController)) {
+      const mid = state.pendingMidText ? `${state.pendingMidText}\n${text}` : text;
+      // 2026-10-23 v5（STAGE E）：流已接管正文 ⇒ 中段 block 结构上不再静态发送（气泡就是交付通道）。
+      // 文本保留在 pendingMidText：投递层随后并入末条正文（H3 推入气泡；气泡不可用时由兜底静态发送兜住）。
+      state.pendingMidText = mid;
+      state.log?.info(`[qqbot][guard][E] mid block not sent statically - stream owns text (chars=${mid.length} alreadyShown=${Boolean(state.streamingController && normalizeBodyForDedupe(mid) === normalizeBodyForDedupe(state.streamingController.lastStreamedText))})`);
       return;
     }
     await sendReply({ text }, info, state.ctx);
@@ -70,9 +102,35 @@ export async function deliverDispatchPayload(
     return;
   }
 
+  if (text && state.deliveredTexts.has(text) && !hasMedia && !payload.audioAsVoice) {
+    if (streamOwnsText(state.streamingController) && state.streamingController && !state.streamingController.isTerminal) {
+      state.streamingController.setFinalText(text);
+      await state.streamingController.finalize();
+    }
+    return;
+  }
+
+  if (state.streamingController?.bodyDelivered) {
+    if (text) state.deliveredTexts.add(text);
+    return;
+  }
+
   if (streamOwnsText(state.streamingController)) {
+    if (state.pendingMidText) {
+      const heldMid = state.pendingMidText;
+      state.pendingMidText = '';
+      if (!text.includes(heldMid)) {
+        text = `${text}\n${heldMid}`;
+        state.log?.info(`[qqbot][guard] folded held mid block into final body (chars=${heldMid.length})`);
+      }
+    }
+    if (state.streamingController) {
+      state.streamingController.setFinalText(text);
+    }
     if (state.streamingController && !state.streamingController.isTerminal) {
       await state.streamingController.finalize();
+    } else if (state.streamingController) {
+      await state.streamingController.sendFinalBodyIfNeeded('already_terminal');
     }
     if (!state.streamingController?.shouldFallbackToStatic) {
       return;
