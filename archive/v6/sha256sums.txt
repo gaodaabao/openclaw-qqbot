@@ -1,0 +1,11 @@
+f28e041e6708147e3a8af0fde9ece59668853d9906a812a717f9548f5be15218  archive/v6/README.md
+fc6be46f07a79f4fac3ac1ac7baf7701bf18d116b70705b00994eeecc59007c3  archive/v6/base/npm-original-2.0.4-index.cjs
+f5d99db0eef0cd7f3daffa0b87aa17dbca7bf9710511b04571e19f919b4fe73d  archive/v6/base/stock-2.0.4-index.cjs
+c797a536242bcd76bf1eab4a072d7ae93adaef112151b094d9a1f660b54a58dc  archive/v6/historical-patches.diff
+ed4ec421b418d7ef15f666b08c597951bde1483dac6690a9cb742a1e154b1d99  archive/v6/index.cjs.v6
+648563873e4be850a70efd3e3412a1946559c33512cd8cb3ee44957067e60b32  archive/v6/patches/qqbot-streaming-bodyfallback-fix.patch
+787d005f813dc4f193a5e1f4017a14defa2de941c70e5bbe87c0a0ee9a870538  archive/v6/patches/qqbot-streaming-bodyfallback-fix.py
+108241d69e2cf3532dba7d49696b55214b711c8b5c2a808a16b4d1e3f164fe84  archive/v6/source-port/NOTE.md
+8be1bf13e79311d02571c7f74f0b4099c5f8dd19093b6e09258981be5d2d8196  archive/v6/source-port/dep.diff
+0447b3120aa7177b582c2f8cd18e0f07d68146374277252584deb123e7e3d87d  archive/v6/source-port/plugin-clean.diff
+41353090e1a99a842f76ed9be191527114274e6b25264421d3f5c84f20358d16  archive/v6/verify/qqbot-parity-check.py

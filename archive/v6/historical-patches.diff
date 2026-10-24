@@ -1,0 +1,92 @@
+--- npm-original-2.0.4-index.cjs	1985-10-26 16:15:00.000000000 +0800
++++ stock-2.0.4-index.cjs	2026-10-19 15:00:58.000000000 +0800
+@@ -12914,9 +12914,19 @@
+     ...createMonitoredAgentEventHandlers(eventLog),
+     ...streamingController ? {
+       onPartialReply: async (payload) => {
+-        const text = payload.text ?? "";
++        const text = payload.text ?? payload.delta ?? "";
+         eventLog?.debug(`onPartialReply textLen=${text.length}`);
+-        if (!text) return false;
++        if (!text) {
++          if (!streamingController.__probeEmptyLogged) {
++            streamingController.__probeEmptyLogged = true;
++            eventLog?.info(`[qqbot][probe] partial callback reached with EMPTY text keys=${payload ? Object.keys(payload).join("|") : "none"} deltaType=${typeof payload?.delta}`);
++          }
++          return false;
++        }
++        if (!streamingController.__probeFirstLogged) {
++          streamingController.__probeFirstLogged = true;
++          eventLog?.info(`[qqbot][probe] first non-empty partial len=${text.length} head=${JSON.stringify(text.slice(0, 40))}`);
++        }
+         await streamingController.onPartialReply(text);
+         return true;
+       }
+@@ -14952,6 +14962,27 @@
+ function isGfmTableLine(line) {
+   return GFM_TABLE_DATA_RE.test(line) || GFM_TABLE_SEP_RE.test(line);
+ }
++// ── 静默文本识别（2026-10-08 silent-reply-fix）──
++// 镜像核心 dist/tokens-BTKQYTUd.mjs 的 isSilentReplyText / isSilentReplyPrefixText 语义：
++// message 工具发出 NO_REPLY / HEARTBEAT_OK 等静默 token 时，跳过真实 QQ API 发送，
++// 直接返回成功结果，避免 message_tool_only 模式下 runtime 判定“没有可见交付”而死循环。
++var QQ_SILENT_REPLY_TOKENS = ["NO_REPLY", "HEARTBEAT_OK"];
++function isQQBotSilentReply(text) {
++  if (!text || typeof text !== "string") return false;
++  const trimmed = text.trim();
++  if (!trimmed) return false;
++  const stripEdgePunctuation = (s) => s.replace(/^\p{P}+/u, "").replace(/\p{P}+$/u, "");
++  // 完全等于：带可选空白/可重复/边缘标点，大小写不敏感（与核心 getSilentExactRegex 一致）
++  const exactRe = /^\s*(?:NO_REPLY|HEARTBEAT_OK)(?:\s+(?:NO_REPLY|HEARTBEAT_OK))*\s*$/i;
++  if (exactRe.test(trimmed) || exactRe.test(stripEdgePunctuation(trimmed))) return true;
++  // 前缀匹配：全大写、长度>=2、是某个静默 token 的前缀（与核心 isSilentReplyPrefixText 一致）
++  if (trimmed === trimmed.toUpperCase() && trimmed.length >= 2) {
++    for (const token of QQ_SILENT_REPLY_TOKENS) {
++      if (token.length > trimmed.length && token.startsWith(trimmed)) return true;
++    }
++  }
++  return false;
++}
+ var qqbotPlugin = {
+   id: "qqbot",
+   meta: {
+@@ -14982,7 +15013,7 @@
+       const policy = resolveToolPolicy(cfg, groupId, accountId ?? void 0);
+       if (policy === "full") return void 0;
+       if (policy === "none") return { allow: [], deny: ["*"] };
+-      return { allow: [] };
++      return void 0;
+     },
+     resolveGroupIntroHint: ({ cfg, accountId, groupId }) => {
+       if (!groupId) return void 0;
+@@ -15065,6 +15096,19 @@
+       hint: "QQ Bot \u76EE\u6807\u683C\u5F0F: qqbot:c2c:openid (\u79C1\u804A) \u6216 qqbot:group:groupid (\u7FA4\u804A)"
+     }
+   },
++  // ── 9.8 message 工具声明（Telegram 同构写法 v3 修正版 2026-10-04）──
++  agentPrompt: {
++    messageToolHints: ({ cfg, accountId }) => ["send"],
++    messageToolCapabilities: ({ cfg, accountId }) => ["delivery-pin"]
++  },
++  actions: {
++    describeMessageTool: (context) => ({
++      actions: ["send"],
++      capabilities: ["delivery-pin"],
++      schema: [],
++      mediaSourceParams: {}
++    })
++  },
+   // ── 出站 ──
+   outbound: {
+     deliveryMode: "direct",
+@@ -15114,6 +15158,10 @@
+     sendText: async ({ to, text, accountId, replyToId, cfg }) => {
+       const account = resolveQQBotAccount(cfg, accountId ?? void 0);
+       const outLog = createOutLog(account.accountId);
++      if (isQQBotSilentReply(text) || /could not deliver it to this chat/i.test(text)) {
++        outLog.info(`[qqbot] suppressed (silent/delivery-notice): ${JSON.stringify(text).slice(0, 80)} to=${to} replyTo=${replyToId ?? "-"}`);
++        return { channel: "qqbot", messageId: "" };
++      }
+       outLog.debug(`sendText to=${to} len=${text.length} replyTo=${replyToId ?? "-"}`);
+       const result = await sendText({ to, text, accountId, replyToId, account });
+       if (result.error) throw new Error(result.error);
