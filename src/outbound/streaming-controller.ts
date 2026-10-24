@@ -47,6 +47,11 @@ export interface StreamingControllerDeps {
 // 2026-10-23 v3（H4）：上限 2 → 8。理据：流帧走 sendC2CStreamMessage
 // （StreamSession.update/complete），不经过 resolveMsgId/ReplyLimiter，因此草稿不挤占正文额度；
 // 保留上限仅为防刷屏 / 防过量流 API 调用（6~10 区间取中值 8）。
+/**
+ * 单个流会话允许的最大草稿（draft）片数。
+ *
+ * 超出后不再推送新草稿，剩余正文由最终正文一次性送出，避免刷屏。
+ */
 const QQBOT_STREAM_MAX_DRAFTS = 8;
 
 // ── 控制器 ──
@@ -366,6 +371,12 @@ function normalizeWs(s: string): string {
   return s.replace(/\s+/g, ' ');
 }
 // 2026-10-23 v3（H1）：判重前的空白归一 —— trim + 折叠连续空白/空行，避免「仅差空白」重复发送
+/**
+ * 归一化正文用于判重比较。
+ *
+ * 只做空白归一（去首尾空白、折叠连续空白），不做大小写或标点处理，
+ * 避免把「视觉上相同但语义不同」的正文误判为重复。
+ */
 export function normalizeBodyForDedupe(s: string): string {
   return String(s ?? '').replace(/\s+/g, ' ').trim();
 }

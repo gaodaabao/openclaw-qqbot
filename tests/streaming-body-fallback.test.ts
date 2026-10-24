@@ -115,7 +115,6 @@ function makeState(
     deliverReply: async (payload) => {
       staticSends.push(payload.text ?? '');
     },
-    midBlockSent: 0,
     pendingMidText: '',
   };
 }
@@ -169,6 +168,10 @@ await test('中段 block 不丢：流接管后并入末条正文', async () => {
   const last = updates.at(-1) ?? '';
   assert.ok(last.includes('中段内容'), `末条气泡必须含中段内容，实际=${JSON.stringify(last)}`);
   assert.ok(last.includes('末条正文'), `末条气泡必须含末条正文，实际=${JSON.stringify(last)}`);
+  assert.ok(
+    last.indexOf('中段内容') < last.indexOf('末条正文'),
+    `中段内容必须排在末条正文之前（按到达顺序），实际=${JSON.stringify(last)}`,
+  );
 });
 
 // ── 4. 平台已定稿的流 → 不刷 ERROR，只 warn 一次 ──

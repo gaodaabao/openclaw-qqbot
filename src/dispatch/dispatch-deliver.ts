@@ -120,7 +120,9 @@ export async function deliverDispatchPayload(
       const heldMid = state.pendingMidText;
       state.pendingMidText = '';
       if (!text.includes(heldMid)) {
-        text = `${text}\n${heldMid}`;
+        // 中段文本早于最终正文到达 ⇒ 折叠时必须放在最终正文之前；
+        // 最终正文为空（仅媒体）时也不能拼出前导换行。
+        text = text ? `${heldMid}\n${text}` : heldMid;
         state.log?.info(`[qqbot][guard] folded held mid block into final body (chars=${heldMid.length})`);
       }
     }
