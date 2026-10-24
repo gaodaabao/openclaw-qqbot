@@ -1,4 +1,4 @@
-f28e041e6708147e3a8af0fde9ece59668853d9906a812a717f9548f5be15218  archive/v6/README.md
+3c2f002323a04fe6b8ccaf0f3ee5f7a939bad2286ce4f4a71a2e060aa1a76803  archive/v6/README.md
 fc6be46f07a79f4fac3ac1ac7baf7701bf18d116b70705b00994eeecc59007c3  archive/v6/base/npm-original-2.0.4-index.cjs
 f5d99db0eef0cd7f3daffa0b87aa17dbca7bf9710511b04571e19f919b4fe73d  archive/v6/base/stock-2.0.4-index.cjs
 c797a536242bcd76bf1eab4a072d7ae93adaef112151b094d9a1f660b54a58dc  archive/v6/historical-patches.diff
