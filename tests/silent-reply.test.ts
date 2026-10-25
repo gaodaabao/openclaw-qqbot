@@ -4,7 +4,7 @@
  * 运行方式: npx tsx tests/silent-reply.test.ts
  */
 import assert from 'node:assert/strict';
-import { isQQBotSilentReply } from '../src/utils/silent-reply.js';
+import { isQQBotDeliveryFailureNotice, isQQBotSilentReply, shouldSuppressQQBotSend } from '../src/utils/silent-reply.js';
 import { createQqbotReplyOptions } from '../src/dispatch/reply-options.js';
 
 let passed = 0;
@@ -46,6 +46,45 @@ await test('静默 token：普通回复不被误判', () => {
   assert.equal(isQQBotSilentReply(''), false);
   assert.equal(isQQBotSilentReply(undefined), false);
   assert.equal(isQQBotSilentReply(null), false);
+});
+
+await test('投递失败提示：只有整条提示语本身才算数', () => {
+  const notice = 'I generated a reply but could not deliver it to this chat. Please try again.';
+  assert.equal(isQQBotDeliveryFailureNotice(notice), true);
+  assert.equal(isQQBotDeliveryFailureNotice(`  ${notice}  `), true);
+  assert.equal(isQQBotDeliveryFailureNotice(undefined), false);
+  assert.equal(isQQBotDeliveryFailureNotice(''), false);
+});
+
+await test('投递失败提示：允许前缀措辞差异，但结尾必须是完整句子', () => {
+  assert.equal(
+    isQQBotDeliveryFailureNotice('Sorry, could not deliver it to this chat. Please try again.'),
+    true,
+  );
+  assert.equal(
+    isQQBotDeliveryFailureNotice('could not deliver it to this chat. Please try again'),
+    false,
+    '结尾不完整不算提示语',
+  );
+});
+
+await test('投递失败提示：只是提到该文案的回复不能被当作静默丢弃', () => {
+  const mentioning = '刚才那条回复提示 could not deliver it to this chat，所以我重发了一遍。';
+  assert.equal(isQQBotDeliveryFailureNotice(mentioning), false);
+  assert.equal(isQQBotSilentReply(mentioning), false);
+  assert.equal(shouldSuppressQQBotSend(mentioning), false, '提到该文案的正常回复必须照常发出');
+
+  const partial = 'could not deliver it to this chat';
+  assert.equal(shouldSuppressQQBotSend(partial), false, '只包含片段的回复不能被丢弃');
+});
+
+await test('静默 token 与完整投递失败提示仍然会被抑制', () => {
+  assert.equal(shouldSuppressQQBotSend('NO_REPLY'), true);
+  assert.equal(shouldSuppressQQBotSend('HEARTBEAT_OK'), true);
+  assert.equal(
+    shouldSuppressQQBotSend('I generated a reply but could not deliver it to this chat. Please try again.'),
+    true,
+  );
 });
 
 await test('onPartialReply：只有 delta 时也要把正文交给流', async () => {
