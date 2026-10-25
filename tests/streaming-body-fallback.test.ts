@@ -174,6 +174,83 @@ await test('中段 block 不丢：流接管后并入末条正文', async () => {
   );
 });
 
+// ── 3b. 静态兜底必须带上折叠后的正文（pendingMidText 不丢） ──
+
+/** 首块失败且可手动放行的控制器（用于构造“流在首块被接受前失败”的时序） */
+function makeGatedFailingController() {
+  const updates: string[] = [];
+  const staticSends: string[] = [];
+  const log = makeLog();
+  let release: () => void = () => {};
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+
+  const session = {
+    async update(text: string) {
+      await gate;
+      updates.push(text);
+      throw new Error('stream update failed');
+    },
+    async complete() {},
+  };
+
+  const controller = new StreamingController({
+    gateway: { openStream: () => session } as never,
+    target: { scope: 'c2c', targetId: 'u1', msgId: 'm1' } as never,
+    accountId: 'acc1',
+    replyToId: 'm1',
+    log: log as never,
+    sendFallback: async (body: string) => {
+      staticSends.push(body);
+      return undefined;
+    },
+  });
+
+  return { controller, updates, staticSends, log, releaseUpdate: release };
+}
+
+await test('流在首块被接受前失败：静态兜底正文含中段内容', async () => {
+  const { controller, staticSends, log, releaseUpdate } = makeGatedFailingController();
+  const state = makeState(controller, log, staticSends);
+
+  // 首块尚未被接受（hasStarted 已置位），中段 block ⇒ 挂到 pendingMidText
+  const partial = controller.onPartialReply('开头部分');
+  await deliverDispatchPayload({ text: '中段内容' }, { kind: 'block' }, state);
+  assert.equal(state.pendingMidText, '中段内容', '中段内容必须被保留');
+
+  // 首块失败 ⇒ 控制器降级为静态兜底
+  releaseUpdate();
+  await partial;
+  assert.equal(controller.shouldFallbackToStatic, true, '首块失败后应降级为静态兜底');
+
+  await deliverDispatchPayload({ text: '末条正文' }, { kind: 'final' }, state);
+
+  assert.equal(staticSends.length, 1, '静态兜底必须发出恰好 1 条');
+  const sent = staticSends[0] ?? '';
+  assert.ok(sent.includes('中段内容'), `静态兜底正文必须含中段内容，实际=${JSON.stringify(sent)}`);
+  assert.ok(sent.includes('末条正文'), `静态兜底正文必须含末条正文，实际=${JSON.stringify(sent)}`);
+  assert.ok(
+    sent.indexOf('中段内容') < sent.indexOf('末条正文'),
+    `中段内容必须排在末条正文之前，实际=${JSON.stringify(sent)}`,
+  );
+});
+
+await test('流在首块被接受前失败：仅媒体的末条也要带上中段内容', async () => {
+  const { controller, staticSends, log, releaseUpdate } = makeGatedFailingController();
+  const state = makeState(controller, log, staticSends);
+
+  const partial = controller.onPartialReply('开头部分');
+  await deliverDispatchPayload({ text: '中段内容' }, { kind: 'block' }, state);
+  releaseUpdate();
+  await partial;
+
+  // 仅媒体的末条（无正文）⇒ 中段内容不能丢
+  await deliverDispatchPayload({ mediaUrl: 'https://cdn/a.png' }, { kind: 'final' }, state);
+
+  assert.equal(staticSends.length, 1, '静态兜底必须发出恰好 1 条');
+  const sent = staticSends[0] ?? '';
+  assert.ok(sent.includes('中段内容'), `静态兜底正文必须含中段内容，实际=${JSON.stringify(sent)}`);
+});
+
 // ── 4. 平台已定稿的流 → 不刷 ERROR，只 warn 一次 ──
 
 await test('平台已定稿：update 被拒 → 不刷 ERROR，只 warn 一次', async () => {

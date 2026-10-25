@@ -50,6 +50,22 @@ export function streamOwnsText(controller: StreamTextOwner | null): boolean {
   return Boolean(controller?.hasStarted && !controller.shouldFallbackToStatic);
 }
 
+/**
+ * 把被流接管、尚未静态发送的中段文本（pendingMidText）折叠进末条正文。
+ *
+ * 中段文本早于最终正文到达 ⇒ 折叠时必须放在最终正文之前；
+ * 最终正文为空（仅媒体）时也不能拼出前导换行。
+ */
+function foldHeldMidText(text: string, state: DispatchDeliverState): string {
+  if (!state.pendingMidText) return text;
+  const heldMid = state.pendingMidText;
+  state.pendingMidText = '';
+  if (text.includes(heldMid)) return text;
+  const merged = text ? `${heldMid}\n${text}` : heldMid;
+  state.log?.info(`[qqbot][guard] folded held mid block into final body (chars=${heldMid.length})`);
+  return merged;
+}
+
 export async function deliverDispatchPayload(
   payload: DeliverPayload,
   info: DeliverInfo | undefined,
@@ -116,16 +132,7 @@ export async function deliverDispatchPayload(
   }
 
   if (streamOwnsText(state.streamingController)) {
-    if (state.pendingMidText) {
-      const heldMid = state.pendingMidText;
-      state.pendingMidText = '';
-      if (!text.includes(heldMid)) {
-        // 中段文本早于最终正文到达 ⇒ 折叠时必须放在最终正文之前；
-        // 最终正文为空（仅媒体）时也不能拼出前导换行。
-        text = text ? `${heldMid}\n${text}` : heldMid;
-        state.log?.info(`[qqbot][guard] folded held mid block into final body (chars=${heldMid.length})`);
-      }
-    }
+    text = foldHeldMidText(text, state);
     if (state.streamingController) {
       state.streamingController.setFinalText(text);
     }
@@ -140,11 +147,20 @@ export async function deliverDispatchPayload(
     state.log?.warn(`streaming fallback to static`);
   }
 
+  // 流在首块被接受前失败（shouldFallbackToStatic）时，上面的折叠分支不会执行，
+  // 中段文本仍挂在 pendingMidText 上 ⇒ 静态兜底前必须再折叠一次，否则中段内容丢失。
+  text = foldHeldMidText(text, state);
+
   if (text && state.deliveredTexts.has(text) && !hasMedia && !payload.audioAsVoice) {
     return;
   }
 
-  const filteredPayload = filterDeliveredMedia(payload, state.deliveredMediaUrls);
+  // 静态兜底必须带上折叠后的正文：流在首块被接受前失败时（shouldFallbackToStatic），
+  // 控制器不会走自己的兜底发送，这里是唯一出口；用原始 payload 会丢掉 pendingMidText。
+  const fallbackPayload = text && text !== (payload.text?.trim() ?? '')
+    ? { ...payload, text }
+    : payload;
+  const filteredPayload = filterDeliveredMedia(fallbackPayload, state.deliveredMediaUrls);
   const payloadToSend = text && state.deliveredTexts.has(text)
     ? { ...filteredPayload, text: undefined }
     : filteredPayload;
